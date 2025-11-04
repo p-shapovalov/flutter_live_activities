@@ -38,6 +38,3 @@ flutter:
     platforms:
       ios:
         pluginClass: LiveActivitiesPlugin
-      android:
-        package: com.example.live_activities
-        pluginClass: LiveActivitiesPlugin
