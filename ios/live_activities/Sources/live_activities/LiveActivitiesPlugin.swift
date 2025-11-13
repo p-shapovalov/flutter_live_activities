@@ -474,7 +474,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   }
   
   @available(iOS 16.1, *)
-  private func monitorLiveActivity<T : LiveActivitiesAppAttributes>(_ activity: Activity<T>) {
+  private func monitorLiveActivity(_ activity: Activity<LiveActivitiesAppAttributes>) {
     Task {
       for await state in activity.activityStateUpdates {
         switch state {
@@ -507,7 +507,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   }
   
   @available(iOS 16.1, *)
-  private func monitorTokenChanges<T: LiveActivitiesAppAttributes>(_ activity: Activity<T>) {
+  private func monitorTokenChanges(_ activity: Activity<LiveActivitiesAppAttributes>) {
     Task {
       for await data in activity.pushTokenUpdates {
         DispatchQueue.main.async {
