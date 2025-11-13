@@ -280,10 +280,10 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     }
     if (deliveryActivity != nil) {
       if removeWhenAppIsKilled {
-        appLifecycleLiveActivityIds.append(deliveryActivity!.id)
+          appLifecycleLiveActivityIds.append(deliveryActivity!.attributes.id)
       }
       monitorLiveActivity(deliveryActivity!)
-      result(deliveryActivity!.id)
+        result(deliveryActivity!.attributes.id)
     }
   }
   
@@ -331,7 +331,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
           $0.attributes.id == activityId && $0.activityState != .dismissed && $0.activityState != .ended
         }
 
-        if let activityId = existingActivity?.id {
+        if let activityId = existingActivity?.attributes.id {
             updateActivity(activityId: activityId, data: data, alertConfig: nil, result: result)
       } else {
         createActivity(data: data, removeWhenAppIsKilled: removeWhenAppIsKilled, staleIn: staleIn, activityId: activityId, result: result)
