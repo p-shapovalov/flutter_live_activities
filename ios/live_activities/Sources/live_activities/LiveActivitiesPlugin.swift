@@ -357,7 +357,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     Task {
       var pushToken: String?;
       for activity in Activity<LiveActivitiesAppAttributes>.activities {
-        if (activityId == activity.id) {
+          if (activityId == activity.attributes.id) {
           if let data = activity.pushToken {
             pushToken = data.map { String(format: "%02x", $0) }.joined()
           }
@@ -405,7 +405,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   func getAllActivitiesIds(result: @escaping FlutterResult) {
     var activitiesId: [String] = []
     for activity in Activity<LiveActivitiesAppAttributes>.activities {
-      activitiesId.append(activity.id)
+        activitiesId.append(activity.attributes.id)
     }
     
     result(activitiesId)
@@ -415,7 +415,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   func getAllActivities(result: @escaping FlutterResult) {
     var activitiesState: [String: String] = [:] // Corrected here
     for activity in Activity<LiveActivitiesAppAttributes>.activities {
-      activitiesState[activity.id] = activityStateToString(activityState: activity.activityState)
+      activitiesState[activity.attributes.id] = activityStateToString(activityState: activity.activityState)
     }
 
     result(activitiesState)
@@ -425,7 +425,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   private func endActivitiesWithId(activityIds: [String]) async {
     for activity in Activity<LiveActivitiesAppAttributes>.activities {
       for id in activityIds {
-        if id == activity.id {
+        if id == activity.attributes.id {
           await activity.end(dismissalPolicy: .immediate)
           break
         }
@@ -483,21 +483,21 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         case .dismissed, .ended:
           DispatchQueue.main.async {
               var response: Dictionary<String, Any> = Dictionary()
-              response["activityId"] = activity.id
+              response["activityId"] = activity.attributes.id
               response["status"] = "ended"
               self.activityEventSink?.self(response)
           }
         case .stale:
           DispatchQueue.main.async {
               var response: Dictionary<String, Any> = Dictionary()
-              response["activityId"] = activity.id
+              response["activityId"] = activity.attributes.id
               response["status"] = "stale"
               self.activityEventSink?.self(response)
           }
         @unknown default:
           DispatchQueue.main.async {
               var response: Dictionary<String, Any> = Dictionary()
-              response["activityId"] = activity.id
+              response["activityId"] = activity.attributes.id
               response["status"] = "unknown"
               self.activityEventSink?.self(response)
           }
@@ -514,7 +514,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
           var response: Dictionary<String, Any> = Dictionary()
           let pushToken = data.map {String(format: "%02x", $0)}.joined()
           response["token"] = pushToken
-          response["activityId"] = activity.id
+          response["activityId"] = activity.attributes.id
           response["status"] = "active"
           self.activityEventSink?.self(response)
         }
