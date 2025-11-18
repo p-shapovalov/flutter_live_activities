@@ -291,7 +291,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   func updateActivity(activityId: String, data: [String: Any?], alertConfig: FlutterAlertConfig?, result: @escaping FlutterResult) {
     Task {
         let activities = await MainActor.run { Activity<LiveActivitiesAppAttributes>.activities }
-        guard let activity = activities.first(where: { $0.id == activityId }) else {
+        guard let activity = activities.first(where: { $0.attributes.id == activityId }) else {
             result(FlutterError(code: "ACTIVITY_ERROR", message: "Activity not found", details: nil))
             return
         }
@@ -342,7 +342,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   func getActivityState(activityId: String, result: @escaping FlutterResult) {
     Task {
-      if let matchingActivity = Activity<LiveActivitiesAppAttributes>.activities.first(where: { $0.id == activityId }) {
+      if let matchingActivity = Activity<LiveActivitiesAppAttributes>.activities.first(where: { $0.attributes.id == activityId }) {
         var state = activityStateToString(activityState: matchingActivity.activityState)
         result(state)
       } else {
