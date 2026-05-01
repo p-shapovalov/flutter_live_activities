@@ -609,9 +609,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   
   @available(iOS 16.1, *)
   private func monitorTokenChanges(_ activity: Activity<RideActivityAttributes>) {
-    if tokenMonitoredActivities.contains(activity.id) {
-      return
-    }
+    if tokenMonitoredActivities.contains(activity.id) { return }
     tokenMonitoredActivities.insert(activity.id)
 
     // AsyncSequence path — works for activities the app created itself
@@ -626,18 +624,22 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     // Polling fallback — for push-to-start activities, iOS populates
     // `activity.pushToken` without firing the AsyncSequence. Poll at a
     // moderate cadence until we either see a token, the activity ends,
-    // or we time out.
+    // or we time out. Re-fetch the activity from `Activity.activities`
+    // each tick in case the captured reference doesn't observe property
+    // updates.
+    let sysId = activity.id
     Task {
       let intervalNs: UInt64 = 1_500_000_000 // 1.5s
       let maxAttempts = 60                   // ~90s total
       for _ in 1...maxAttempts {
         try? await Task.sleep(nanoseconds: intervalNs)
-        let state = activity.activityState
-        if state == .ended || state == .dismissed {
+        guard let current = Activity<RideActivityAttributes>.activities.first(where: { $0.id == sysId }) else {
           return
         }
-        if let data = activity.pushToken {
-          self.emitTokenIfChanged(activity, data: data, source: "poll")
+        let state = current.activityState
+        if state == .ended || state == .dismissed { return }
+        if let data = current.pushToken {
+          self.emitTokenIfChanged(current, data: data, source: "poll")
           return
         }
       }
