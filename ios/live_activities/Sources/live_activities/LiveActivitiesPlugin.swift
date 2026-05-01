@@ -519,7 +519,21 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     public typealias LiveDeliveryData = ContentState
 
     public struct ContentState: Codable, Hashable {
-      var appGroupId: String = ""      
+      var appGroupId: String = ""
+
+      init(appGroupId: String = "") {
+        self.appGroupId = appGroupId
+      }
+
+      // Lenient decoder so a payload missing `appGroupId` (e.g. backend's
+      // push-to-start content-state, which carries the widget's fields like
+      // `deviceId`/`statusText` instead) doesn't fail with NSCocoaErrorDomain
+      // 4865. Swift's auto-synthesized decoder ignores property defaults, so
+      // we have to write this explicitly.
+      init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        appGroupId = try c.decodeIfPresent(String.self, forKey: .appGroupId) ?? ""
+      }
     }
 
     var id: String = ""
