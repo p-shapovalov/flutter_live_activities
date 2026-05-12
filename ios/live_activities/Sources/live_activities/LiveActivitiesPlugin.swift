@@ -251,16 +251,16 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
       }
     }
     
-    let liveDeliveryAttributes: RideActivityAttributes
+    let liveDeliveryAttributes: LiveActivityAppsAttributes
     if let activityId = activityId {
-        liveDeliveryAttributes = RideActivityAttributes(id: activityId)
+        liveDeliveryAttributes = LiveActivityAppsAttributes(id: activityId)
     } else {
-        liveDeliveryAttributes = RideActivityAttributes()
+        liveDeliveryAttributes = LiveActivityAppsAttributes()
     }
     // Dynamic content lives in shared UserDefaults; the widget reads it via
     // the appGroupId carried in ContentState.
-    let initialContentState = RideActivityAttributes.LiveDeliveryData(appGroupId: appGroupId!)
-    var deliveryActivity: Activity<RideActivityAttributes>?
+    let initialContentState = LiveActivityAppsAttributes.LiveDeliveryData(appGroupId: appGroupId!)
+    var deliveryActivity: Activity<LiveActivityAppsAttributes>?
     let prefix = liveDeliveryAttributes.id
 
     for item in data {
@@ -281,7 +281,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
       }
     } else {
       do {
-        deliveryActivity = try Activity<RideActivityAttributes>.request(
+        deliveryActivity = try Activity<LiveActivityAppsAttributes>.request(
           attributes: liveDeliveryAttributes,
           contentState: initialContentState,
           pushType: .token)
@@ -304,7 +304,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   func updateActivity(activityId: String, data: [String: Any?], alertConfig: FlutterAlertConfig?, result: @escaping FlutterResult) {
     Task {
-        let activities = await MainActor.run { Activity<RideActivityAttributes>.activities }
+        let activities = await MainActor.run { Activity<LiveActivityAppsAttributes>.activities }
         guard let activity = activities.first(where: { $0.attributes.id == activityId }) else {
             result(FlutterError(code: "ACTIVITY_ERROR", message: "Activity not found", details: nil))
             return
@@ -322,7 +322,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
             }
           }
           
-          let updatedStatus = RideActivityAttributes.LiveDeliveryData(appGroupId: self.appGroupId!)
+          let updatedStatus = LiveActivityAppsAttributes.LiveDeliveryData(appGroupId: self.appGroupId!)
           await activity.update(using: updatedStatus, alertConfiguration: alertConfig?.getAlertConfig())
 
       result(nil)
@@ -332,9 +332,9 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   func createOrUpdateActivity(data: [String: Any], activityId: String, removeWhenAppIsKilled: Bool, staleIn: Int?, result: @escaping FlutterResult) {
     Task {
-        var activities: [Activity<RideActivityAttributes>] = []
+        var activities: [Activity<LiveActivityAppsAttributes>] = []
         for _ in 0..<3 { // Try up to 3 times
-            activities = await MainActor.run { Activity<RideActivityAttributes>.activities }
+            activities = await MainActor.run { Activity<LiveActivityAppsAttributes>.activities }
             if !activities.isEmpty {
                 break
             }
@@ -356,7 +356,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   func getActivityState(activityId: String, result: @escaping FlutterResult) {
     Task {
-      if let matchingActivity = Activity<RideActivityAttributes>.activities.first(where: { $0.attributes.id == activityId }) {
+      if let matchingActivity = Activity<LiveActivityAppsAttributes>.activities.first(where: { $0.attributes.id == activityId }) {
         var state = activityStateToString(activityState: matchingActivity.activityState)
         result(state)
       } else {
@@ -370,7 +370,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   func getPushToken(activityId: String, result: @escaping FlutterResult) {
     Task {
       var pushToken: String?;
-      for activity in Activity<RideActivityAttributes>.activities {
+      for activity in Activity<LiveActivityAppsAttributes>.activities {
           if (activityId == activity.attributes.id) {
           if let data = activity.pushToken {
             pushToken = data.map { String(format: "%02x", $0) }.joined()
@@ -393,7 +393,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   func endAllActivities(result: @escaping FlutterResult) {
     Task {
-      for activity in Activity<RideActivityAttributes>.activities {
+      for activity in Activity<LiveActivityAppsAttributes>.activities {
         await activity.end(dismissalPolicy: .immediate)
       }
       appLifecycleLiveActivityIds.removeAll()
@@ -403,14 +403,19 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
 
   private func startObservingPushToStartTokens() {
     if #available(iOS 17.2, *) {
+      NSLog("[LA Plugin] startObservingPushToStartTokens: subscribing to pushToStartTokenUpdates")
       Task {
-        for await data in Activity<RideActivityAttributes>.pushToStartTokenUpdates {
+        for await data in Activity<LiveActivityAppsAttributes>.pushToStartTokenUpdates {
           let token = data.map { String(format: "%02x", $0) }.joined()
+          NSLog("[LA Plugin] pushToStartTokenUpdate received token=\(token.prefix(8))... (\(data.count) bytes)")
           DispatchQueue.main.async {
             self.pushToStartTokenEventSink?(token)
           }
         }
+        NSLog("[LA Plugin] pushToStartTokenUpdates stream ended")
       }
+    } else {
+      NSLog("[LA Plugin] startObservingPushToStartTokens: iOS < 17.2, push-to-start unsupported")
     }
   }
 
@@ -421,31 +426,37 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   private func startObservingActivities() {
     if didStartObservingActivities {
+      NSLog("[LA Plugin] startObservingActivities: already started, skipping")
       return
     }
     didStartObservingActivities = true
 
-    // Attach to activities that already exist when the plugin initializes
-    // (e.g. an LA launched via push-to-start while the app was killed).
-    for activity in Activity<RideActivityAttributes>.activities {
+    let existing = Activity<LiveActivityAppsAttributes>.activities
+    NSLog("[LA Plugin] startObservingActivities: \(existing.count) existing activities at init")
+    for activity in existing {
+      NSLog("[LA Plugin]   existing activity sysId=\(activity.id) attrs.id=\(activity.attributes.id) state=\(activityStateToString(activityState: activity.activityState))")
       monitorIfNeeded(activity)
     }
 
-    // Attach to activities launched after init.
     if #available(iOS 16.2, *) {
+      NSLog("[LA Plugin] subscribing to Activity.activityUpdates")
       Task {
-        for await activity in Activity<RideActivityAttributes>.activityUpdates {
+        for await activity in Activity<LiveActivityAppsAttributes>.activityUpdates {
+          NSLog("[LA Plugin] activityUpdates fired: sysId=\(activity.id) attrs.id=\(activity.attributes.id) state=\(self.activityStateToString(activityState: activity.activityState))")
           self.monitorIfNeeded(activity)
         }
+        NSLog("[LA Plugin] activityUpdates stream ended")
       }
     }
   }
 
   @available(iOS 16.1, *)
-  private func monitorIfNeeded(_ activity: Activity<RideActivityAttributes>) {
+  private func monitorIfNeeded(_ activity: Activity<LiveActivityAppsAttributes>) {
     if monitoredActivities.contains(activity.id) {
+      NSLog("[LA Plugin] monitorIfNeeded: sysId=\(activity.id) already monitored")
       return
     }
+    NSLog("[LA Plugin] monitorIfNeeded: starting monitor for sysId=\(activity.id) attrs.id=\(activity.attributes.id)")
     monitoredActivities.insert(activity.id)
     monitorLiveActivity(activity)
   }
@@ -453,7 +464,7 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   func getAllActivitiesIds(result: @escaping FlutterResult) {
     var activitiesId: [String] = []
-    for activity in Activity<RideActivityAttributes>.activities {
+    for activity in Activity<LiveActivityAppsAttributes>.activities {
         activitiesId.append(activity.attributes.id)
     }
     result(activitiesId)
@@ -461,16 +472,20 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
 
   @available(iOS 16.1, *)
   func getAllActivities(result: @escaping FlutterResult) {
-    var activitiesState: [String: String] = [:] // Corrected here
-    for activity in Activity<RideActivityAttributes>.activities {
-      activitiesState[activity.attributes.id] = activityStateToString(activityState: activity.activityState)
+    var activitiesState: [String: String] = [:]
+    let all = Activity<LiveActivityAppsAttributes>.activities
+    NSLog("[LA Plugin] getAllActivities: \(all.count) total")
+    for activity in all {
+      let stateStr = activityStateToString(activityState: activity.activityState)
+      NSLog("[LA Plugin]   sysId=\(activity.id) attrs.id=\(activity.attributes.id) state=\(stateStr) hasToken=\(activity.pushToken != nil)")
+      activitiesState[activity.attributes.id] = stateStr
     }
     result(activitiesState)
   }
   
   @available(iOS 16.1, *)
   private func endActivitiesWithId(activityIds: [String]) async {
-    for activity in Activity<RideActivityAttributes>.activities {
+    for activity in Activity<LiveActivityAppsAttributes>.activities {
       for id in activityIds {
         if id == activity.attributes.id {
           await activity.end(dismissalPolicy: .immediate)
@@ -510,12 +525,12 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     }
   }
   
-  // Must structurally match `RideActivityAttributes` declared in the
+  // Must structurally match `LiveActivityAppsAttributes` declared in the
   // widget extension. iOS identifies the activity attributes type by its
   // unqualified name across compilation units, and the Codable shape on
   // both sides must tolerate the same payloads (so backend push-to-start
   // payloads and locally-created activities round-trip cleanly).
-  struct RideActivityAttributes: ActivityAttributes, Identifiable {
+  struct LiveActivityAppsAttributes: ActivityAttributes, Identifiable {
     public typealias LiveDeliveryData = ContentState
 
     public struct ContentState: Codable, Hashable {
@@ -538,38 +553,22 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
 
     var id: String = ""
 
-    // Backend's push-to-start payload puts the order identifier under
-    // `attributes.orderId` (not `attributes.id`). Map it to our `id`
-    // property via CodingKeys so `activity.attributes.id` reflects the
-    // order id with no plumbing changes elsewhere.
-    enum CodingKeys: String, CodingKey {
-      case id = "orderId"
-    }
-
     init(id: String = "") {
       self.id = id
-    }
-
-    init(from decoder: Decoder) throws {
-      let c = try decoder.container(keyedBy: CodingKeys.self)
-      id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
     }
   }
   
   @available(iOS 16.1, *)
-  private func monitorLiveActivity(_ activity: Activity<RideActivityAttributes>) {
+  private func monitorLiveActivity(_ activity: Activity<LiveActivityAppsAttributes>) {
     Task {
       for await state in activity.activityStateUpdates {
+        let stateStr = self.activityStateToString(activityState: state)
+        NSLog("[LA Plugin] state change: sysId=\(activity.id) attrs.id=\(activity.attributes.id) -> \(stateStr)")
         switch state {
         case .active:
-          // Emit the current token immediately. `pushTokenUpdates` only fires
-          // on rotation and may not replay the existing token to a late
-          // subscriber — a problem for push-to-start activities (and any
-          // activity discovered via `Activity.activityUpdates`), where the
-          // token already exists by the time we attach. Without this, the
-          // Dart side never sees an `active` event for those activities.
           if let data = activity.pushToken {
             let pushToken = data.map { String(format: "%02x", $0) }.joined()
+            NSLog("[LA Plugin]   active with token=\(pushToken.prefix(8))... (immediate emit)")
             DispatchQueue.main.async {
               var response: Dictionary<String, Any> = Dictionary()
               response["token"] = pushToken
@@ -577,9 +576,12 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
               response["status"] = "active"
               self.activityEventSink?.self(response)
             }
+          } else {
+            NSLog("[LA Plugin]   active but pushToken is nil — will poll")
           }
           monitorTokenChanges(activity)
         case .dismissed, .ended:
+          NSLog("[LA Plugin]   removing from monitored set")
           self.monitoredActivities.remove(activity.id)
           self.lastEmittedToken.removeValue(forKey: activity.id)
           DispatchQueue.main.async {
@@ -604,45 +606,49 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
           }
         }
       }
+      NSLog("[LA Plugin] activityStateUpdates stream ended for sysId=\(activity.id)")
     }
   }
   
   @available(iOS 16.1, *)
-  private func monitorTokenChanges(_ activity: Activity<RideActivityAttributes>) {
-    if tokenMonitoredActivities.contains(activity.id) { return }
+  private func monitorTokenChanges(_ activity: Activity<LiveActivityAppsAttributes>) {
+    if tokenMonitoredActivities.contains(activity.id) {
+      NSLog("[LA Plugin] monitorTokenChanges: sysId=\(activity.id) already monitored")
+      return
+    }
     tokenMonitoredActivities.insert(activity.id)
+    NSLog("[LA Plugin] monitorTokenChanges: sysId=\(activity.id) — starting stream + poll")
 
-    // AsyncSequence path — works for activities the app created itself
-    // (`createActivity`) and for token rotations.
     Task {
       for await data in activity.pushTokenUpdates {
         self.emitTokenIfChanged(activity, data: data, source: "stream")
       }
+      NSLog("[LA Plugin] pushTokenUpdates stream ended for sysId=\(activity.id)")
       self.tokenMonitoredActivities.remove(activity.id)
     }
 
-    // Polling fallback — for push-to-start activities, iOS populates
-    // `activity.pushToken` without firing the AsyncSequence. Poll at a
-    // moderate cadence until we either see a token, the activity ends,
-    // or we time out. Re-fetch the activity from `Activity.activities`
-    // each tick in case the captured reference doesn't observe property
-    // updates.
     let sysId = activity.id
     Task {
       let intervalNs: UInt64 = 1_500_000_000 // 1.5s
       let maxAttempts = 60                   // ~90s total
-      for _ in 1...maxAttempts {
+      for attempt in 1...maxAttempts {
         try? await Task.sleep(nanoseconds: intervalNs)
-        guard let current = Activity<RideActivityAttributes>.activities.first(where: { $0.id == sysId }) else {
+        guard let current = Activity<LiveActivityAppsAttributes>.activities.first(where: { $0.id == sysId }) else {
+          NSLog("[LA Plugin] poll: sysId=\(sysId) gone from Activity.activities at attempt \(attempt)")
           return
         }
         let state = current.activityState
-        if state == .ended || state == .dismissed { return }
+        if state == .ended || state == .dismissed {
+          NSLog("[LA Plugin] poll: sysId=\(sysId) ended/dismissed at attempt \(attempt)")
+          return
+        }
         if let data = current.pushToken {
+          NSLog("[LA Plugin] poll: sysId=\(sysId) got token at attempt \(attempt)")
           self.emitTokenIfChanged(current, data: data, source: "poll")
           return
         }
       }
+      NSLog("[LA Plugin] poll: sysId=\(sysId) timed out after \(maxAttempts) attempts with no token")
     }
   }
 
@@ -651,11 +657,13 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   private var lastEmittedToken: [String: String] = [:]
 
   @available(iOS 16.1, *)
-  private func emitTokenIfChanged(_ activity: Activity<RideActivityAttributes>, data: Data, source: String) {
+  private func emitTokenIfChanged(_ activity: Activity<LiveActivityAppsAttributes>, data: Data, source: String) {
     let pushToken = data.map { String(format: "%02x", $0) }.joined()
     if lastEmittedToken[activity.id] == pushToken {
+      NSLog("[LA Plugin] emitToken[\(source)]: sysId=\(activity.id) token unchanged, skipping")
       return
     }
+    NSLog("[LA Plugin] emitToken[\(source)]: sysId=\(activity.id) attrs.id=\(activity.attributes.id) token=\(pushToken.prefix(8))...")
     lastEmittedToken[activity.id] = pushToken
     DispatchQueue.main.async {
       var response: Dictionary<String, Any> = Dictionary()
