@@ -403,16 +403,13 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
 
   private func startObservingPushToStartTokens() {
     if #available(iOS 17.2, *) {
-      NSLog("[LA Plugin] startObservingPushToStartTokens: subscribing to pushToStartTokenUpdates")
       Task {
         for await data in Activity<LiveActivitiesAppAttributes>.pushToStartTokenUpdates {
           let token = data.map { String(format: "%02x", $0) }.joined()
-          NSLog("[LA Plugin] pushToStartTokenUpdate received token=\(token.prefix(8))... (\(data.count) bytes)")
           DispatchQueue.main.async {
             self.pushToStartTokenEventSink?(token)
           }
         }
-        NSLog("[LA Plugin] pushToStartTokenUpdates stream ended")
       }
     } else {
       NSLog("[LA Plugin] startObservingPushToStartTokens: iOS < 17.2, push-to-start unsupported")
@@ -426,26 +423,20 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   private func startObservingActivities() {
     if didStartObservingActivities {
-      NSLog("[LA Plugin] startObservingActivities: already started, skipping")
       return
     }
     didStartObservingActivities = true
 
     let existing = Activity<LiveActivitiesAppAttributes>.activities
-    NSLog("[LA Plugin] startObservingActivities: \(existing.count) existing activities at init")
     for activity in existing {
-      NSLog("[LA Plugin]   existing activity sysId=\(activity.id) attrs.id=\(activity.attributes.id) state=\(activityStateToString(activityState: activity.activityState))")
       monitorIfNeeded(activity)
     }
 
     if #available(iOS 16.2, *) {
-      NSLog("[LA Plugin] subscribing to Activity.activityUpdates")
       Task {
         for await activity in Activity<LiveActivitiesAppAttributes>.activityUpdates {
-          NSLog("[LA Plugin] activityUpdates fired: sysId=\(activity.id) attrs.id=\(activity.attributes.id) state=\(self.activityStateToString(activityState: activity.activityState))")
           self.monitorIfNeeded(activity)
         }
-        NSLog("[LA Plugin] activityUpdates stream ended")
       }
     }
   }
@@ -453,10 +444,8 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   @available(iOS 16.1, *)
   private func monitorIfNeeded(_ activity: Activity<LiveActivitiesAppAttributes>) {
     if monitoredActivities.contains(activity.id) {
-      NSLog("[LA Plugin] monitorIfNeeded: sysId=\(activity.id) already monitored")
       return
     }
-    NSLog("[LA Plugin] monitorIfNeeded: starting monitor for sysId=\(activity.id) attrs.id=\(activity.attributes.id)")
     monitoredActivities.insert(activity.id)
     monitorLiveActivity(activity)
   }
@@ -474,10 +463,8 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   func getAllActivities(result: @escaping FlutterResult) {
     var activitiesState: [String: String] = [:]
     let all = Activity<LiveActivitiesAppAttributes>.activities
-    NSLog("[LA Plugin] getAllActivities: \(all.count) total")
     for activity in all {
       let stateStr = activityStateToString(activityState: activity.activityState)
-      NSLog("[LA Plugin]   sysId=\(activity.id) attrs.id=\(activity.attributes.id) state=\(stateStr) hasToken=\(activity.pushToken != nil)")
       activitiesState[activity.attributes.id] = stateStr
     }
     result(activitiesState)
@@ -563,12 +550,10 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     Task {
       for await state in activity.activityStateUpdates {
         let stateStr = self.activityStateToString(activityState: state)
-        NSLog("[LA Plugin] state change: sysId=\(activity.id) attrs.id=\(activity.attributes.id) -> \(stateStr)")
         switch state {
         case .active:
           if let data = activity.pushToken {
             let pushToken = data.map { String(format: "%02x", $0) }.joined()
-            NSLog("[LA Plugin]   active with token=\(pushToken.prefix(8))... (immediate emit)")
             DispatchQueue.main.async {
               var response: Dictionary<String, Any> = Dictionary()
               response["token"] = pushToken
@@ -576,12 +561,9 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
               response["status"] = "active"
               self.activityEventSink?.self(response)
             }
-          } else {
-            NSLog("[LA Plugin]   active but pushToken is nil — will poll")
           }
           monitorTokenChanges(activity)
         case .dismissed, .ended:
-          NSLog("[LA Plugin]   removing from monitored set")
           self.monitoredActivities.remove(activity.id)
           self.lastEmittedToken.removeValue(forKey: activity.id)
           DispatchQueue.main.async {
@@ -606,24 +588,20 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
           }
         }
       }
-      NSLog("[LA Plugin] activityStateUpdates stream ended for sysId=\(activity.id)")
     }
   }
   
   @available(iOS 16.1, *)
   private func monitorTokenChanges(_ activity: Activity<LiveActivitiesAppAttributes>) {
     if tokenMonitoredActivities.contains(activity.id) {
-      NSLog("[LA Plugin] monitorTokenChanges: sysId=\(activity.id) already monitored")
       return
     }
     tokenMonitoredActivities.insert(activity.id)
-    NSLog("[LA Plugin] monitorTokenChanges: sysId=\(activity.id) — starting stream + poll")
 
     Task {
       for await data in activity.pushTokenUpdates {
         self.emitTokenIfChanged(activity, data: data, source: "stream")
       }
-      NSLog("[LA Plugin] pushTokenUpdates stream ended for sysId=\(activity.id)")
       self.tokenMonitoredActivities.remove(activity.id)
     }
 
@@ -634,21 +612,17 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
       for attempt in 1...maxAttempts {
         try? await Task.sleep(nanoseconds: intervalNs)
         guard let current = Activity<LiveActivitiesAppAttributes>.activities.first(where: { $0.id == sysId }) else {
-          NSLog("[LA Plugin] poll: sysId=\(sysId) gone from Activity.activities at attempt \(attempt)")
           return
         }
         let state = current.activityState
         if state == .ended || state == .dismissed {
-          NSLog("[LA Plugin] poll: sysId=\(sysId) ended/dismissed at attempt \(attempt)")
           return
         }
         if let data = current.pushToken {
-          NSLog("[LA Plugin] poll: sysId=\(sysId) got token at attempt \(attempt)")
           self.emitTokenIfChanged(current, data: data, source: "poll")
           return
         }
       }
-      NSLog("[LA Plugin] poll: sysId=\(sysId) timed out after \(maxAttempts) attempts with no token")
     }
   }
 
@@ -660,10 +634,8 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   private func emitTokenIfChanged(_ activity: Activity<LiveActivitiesAppAttributes>, data: Data, source: String) {
     let pushToken = data.map { String(format: "%02x", $0) }.joined()
     if lastEmittedToken[activity.id] == pushToken {
-      NSLog("[LA Plugin] emitToken[\(source)]: sysId=\(activity.id) token unchanged, skipping")
       return
     }
-    NSLog("[LA Plugin] emitToken[\(source)]: sysId=\(activity.id) attrs.id=\(activity.attributes.id) token=\(pushToken.prefix(8))...")
     lastEmittedToken[activity.id] = pushToken
     DispatchQueue.main.async {
       var response: Dictionary<String, Any> = Dictionary()
