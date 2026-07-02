@@ -38,6 +38,12 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
   // observer Task that all emit the same token rotations.
   private var tokenMonitoredActivities = Set<String>()
   private var didStartObservingActivities = false
+  // Activity events produced before the Dart side attaches its
+  // activityUpdateStream listener (e.g. a push-to-start activity observed
+  // while the app is still launching) are buffered here and flushed from
+  // onListen — otherwise they'd go into a nil sink and the per-activity
+  // push token would never reach Dart / the backend.
+  private var pendingActivityEvents = [[String: Any]]()
   
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "live_activities", binaryMessenger: registrar.messenger())
@@ -66,6 +72,10 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         urlSchemeSink = events
       } else if (args == "activityUpdateStream") {
         activityEventSink = events
+        for event in pendingActivityEvents {
+          events(event)
+        }
+        pendingActivityEvents.removeAll()
       } else if (args == "pushToStartTokenUpdateStream") {
         pushToStartTokenEventSink = events
         startObservingPushToStartTokens()
@@ -447,6 +457,17 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
       return
     }
     monitoredActivities.insert(activity.id)
+    // A push-to-start activity is usually already .active by the time the
+    // plugin attaches (the system wakes the app after the activity started),
+    // and activityStateUpdates never replays the current state — so the
+    // token has to be emitted and token monitoring started right away, or
+    // it never happens at all.
+    if activity.activityState == .active {
+      if let data = activity.pushToken {
+        emitTokenIfChanged(activity, data: data, source: "attach")
+      }
+      monitorTokenChanges(activity)
+    }
     monitorLiveActivity(activity)
   }
 
@@ -553,39 +574,26 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
         switch state {
         case .active:
           if let data = activity.pushToken {
-            let pushToken = data.map { String(format: "%02x", $0) }.joined()
-            DispatchQueue.main.async {
-              var response: Dictionary<String, Any> = Dictionary()
-              response["token"] = pushToken
-              response["activityId"] = activity.attributes.id
-              response["status"] = "active"
-              self.activityEventSink?.self(response)
-            }
+            emitTokenIfChanged(activity, data: data, source: "state")
           }
           monitorTokenChanges(activity)
         case .dismissed, .ended:
           self.monitoredActivities.remove(activity.id)
           self.lastEmittedToken.removeValue(forKey: activity.id)
-          DispatchQueue.main.async {
-              var response: Dictionary<String, Any> = Dictionary()
-              response["activityId"] = activity.attributes.id
-              response["status"] = "ended"
-              self.activityEventSink?.self(response)
-          }
+          emitActivityEvent([
+            "activityId": activity.attributes.id,
+            "status": "ended",
+          ])
         case .stale:
-          DispatchQueue.main.async {
-              var response: Dictionary<String, Any> = Dictionary()
-              response["activityId"] = activity.attributes.id
-              response["status"] = "stale"
-              self.activityEventSink?.self(response)
-          }
+          emitActivityEvent([
+            "activityId": activity.attributes.id,
+            "status": "stale",
+          ])
         @unknown default:
-          DispatchQueue.main.async {
-              var response: Dictionary<String, Any> = Dictionary()
-              response["activityId"] = activity.attributes.id
-              response["status"] = "unknown"
-              self.activityEventSink?.self(response)
-          }
+          emitActivityEvent([
+            "activityId": activity.attributes.id,
+            "status": "unknown",
+          ])
         }
       }
     }
@@ -637,12 +645,23 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
       return
     }
     lastEmittedToken[activity.id] = pushToken
+    emitActivityEvent([
+      "token": pushToken,
+      "activityId": activity.attributes.id,
+      "status": "active",
+    ])
+  }
+
+  // Delivers to the Dart sink, or buffers until onListen when the sink isn't
+  // attached yet. Buffering (instead of dropping) is what makes recording in
+  // `lastEmittedToken` before delivery safe.
+  private func emitActivityEvent(_ response: [String: Any]) {
     DispatchQueue.main.async {
-      var response: Dictionary<String, Any> = Dictionary()
-      response["token"] = pushToken
-      response["activityId"] = activity.attributes.id
-      response["status"] = "active"
-      self.activityEventSink?.self(response)
+      if let sink = self.activityEventSink {
+        sink(response)
+      } else {
+        self.pendingActivityEvents.append(response)
+      }
     }
   }
 
