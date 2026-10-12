@@ -58,6 +58,21 @@ public class LiveActivitiesPlugin: NSObject, FlutterPlugin, FlutterStreamHandler
     activityStatusChannel.setStreamHandler(instance)
     pushToStartTokenUpdatesChannel.setStreamHandler(instance)
     registrar.addApplicationDelegate(instance)
+
+    // Start observing at process launch, not from the Dart `init` method call.
+    // When iOS wakes the app for a push-to-start activity (or a background
+    // push), its per-activity update push token has to be captured and sent to
+    // the backend, or the backend can't end the activity remotely and the
+    // lock-screen widget stays up until the app is next opened (JET-6136).
+    // Hanging this off `init` meant observation only began once the Dart boot
+    // reached it, which a short background wake can miss. Safe and idempotent
+    // here: the observer path needs no appGroupId (only createActivity does),
+    // `didStartObservingActivities` makes the later `init` call a no-op, and a
+    // token emitted before Dart subscribes is held in `pendingActivityEvents`
+    // and flushed from `onListen`.
+    if #available(iOS 16.1, *) {
+      instance.startObservingActivities()
+    }
   }
 
   public func detachFromEngine(for registrar: FlutterPluginRegistrar) {
